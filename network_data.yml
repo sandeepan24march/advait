@@ -1,0 +1,55 @@
+---
+- name: Collect Network Information
+  hosts: all
+  become: yes
+
+  tasks:
+
+    - name: Run - ip a sh
+      command: ip a sh
+      register: ip_addr
+
+    - name: Run - ip route sh
+      command: ip route sh
+      register: ip_route
+
+    - name: Run - ip link sh
+      command: ip link sh
+      register: ip_link
+
+    - name: Create network_data file on root path
+      copy:
+        dest: /root/network_data.txt
+        content: |
+          ============================================================
+          SERVER: {{ inventory_hostname }}
+          DATE: {{ ansible_date_time.date }} {{ ansible_date_time.time }}
+          ============================================================
+
+          ----------------------
+          IP ADDRESS (ip a sh)
+          ----------------------
+          {{ ip_addr.stdout }}
+
+          ----------------------
+          IP ROUTE (ip route sh)
+          ----------------------
+          {{ ip_route.stdout }}
+
+          ----------------------
+          IP LINK (ip link sh)
+          ----------------------
+          {{ ip_link.stdout }}
+
+          ============================================================
+        mode: '0644'
+        owner: root
+        group: root
+
+    - name: Verify file created
+      command: cat /root/network_data.txt
+      register: verify_output
+
+    - name: Show file content
+      debug:
+        msg: "{{ verify_output.stdout_lines }}"
