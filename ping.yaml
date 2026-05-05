@@ -1,13 +1,6 @@
----
-- name: Ping Test All Servers
+- name: Hello World Sample
   hosts: all
-  become: no
-
   tasks:
-
-    - name: Ping all servers
-      ping:
-
-    - name: Show ping result
+    - name: Hello Message
       debug:
-        msg: "Server {{ inventory_hostname }} is reachable ✅"
+        msg: "Hello World!"
