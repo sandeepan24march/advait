@@ -1,0 +1,82 @@
+---
+- name: Collect CPU Memory and Disk Information
+  hosts: all
+  become: yes
+
+  tasks:
+
+    - name: Get CPU details
+      command: lscpu
+      register: cpu_info
+
+    - name: Get memory details
+      command: free -h
+      register: mem_info
+
+    - name: Get disk partition details
+      command: df -hT
+      register: disk_info
+
+    - name: Get disk partition table
+      command: lsblk
+      register: lsblk_info
+
+    - name: Get top memory consuming processes
+      shell: ps aux --sort=-%mem | head -10
+      register: top_mem
+
+    - name: Get top CPU consuming processes
+      shell: ps aux --sort=-%cpu | head -10
+      register: top_cpu
+
+    - name: Create resource_data file on root path
+      copy:
+        dest: /root/resource_data.txt
+        content: |
+          ============================================================
+          SERVER: {{ inventory_hostname }}
+          DATE: {{ ansible_date_time.date }} {{ ansible_date_time.time }}
+          ============================================================
+
+          ----------------------
+          CPU DETAILS (lscpu)
+          ----------------------
+          {{ cpu_info.stdout }}
+
+          ----------------------
+          MEMORY DETAILS (free -h)
+          ----------------------
+          {{ mem_info.stdout }}
+
+          ----------------------
+          DISK USAGE (df -hT)
+          ----------------------
+          {{ disk_info.stdout }}
+
+          ----------------------
+          DISK PARTITION (lsblk)
+          ----------------------
+          {{ lsblk_info.stdout }}
+
+          ----------------------
+          TOP 10 MEMORY PROCESSES
+          ----------------------
+          {{ top_mem.stdout }}
+
+          ----------------------
+          TOP 10 CPU PROCESSES
+          ----------------------
+          {{ top_cpu.stdout }}
+
+          ============================================================
+        mode: '0644'
+        owner: root
+        group: root
+
+    - name: Verify file created
+      command: cat /root/resource_data.txt
+      register: verify_output
+
+    - name: Show file content
+      debug:
+        msg: "{{ verify_output.stdout_lines }}"
