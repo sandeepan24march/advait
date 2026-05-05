@@ -19,7 +19,7 @@
       
     - name: Run - lspci | grep -i ether
       command: lspci | grep -i ether
-      register: lspci
+      register: lspci_output
 
     - name: Create network_data file on root path
       copy:
