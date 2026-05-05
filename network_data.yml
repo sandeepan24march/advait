@@ -16,6 +16,10 @@
     - name: Run - ip link sh
       command: ip link sh
       register: ip_link
+      
+    - name: Run - lspci | grep -i ether
+      command: lspci | grep -i ether
+      register: lspci
 
     - name: Create network_data file on root path
       copy:
