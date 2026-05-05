@@ -1,0 +1,13 @@
+---
+- name: Ping Test All Servers
+  hosts: all
+  become: yes
+
+  tasks:
+
+    - name: Ping all servers
+      ping:
+
+    - name: Show ping result
+      debug:
+        msg: "Server {{ inventory_hostname }} is reachable ✅"
