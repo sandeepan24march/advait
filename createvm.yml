@@ -5,7 +5,7 @@
 
   vars:
     vm_name: "awx_ansible"
-    vm_ram_mb: 4096
+    vm_ram_mb: 8192
     vm_vcpus: 2
     vm_sockets: 1
     vm_cores: 2
