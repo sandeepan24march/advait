@@ -4,28 +4,21 @@
   become: yes
 
   vars:
-    # VM Details
     vm_name: "awx_ansible"
     vm_ram_mb: 4096
     vm_vcpus: 2
     vm_sockets: 1
     vm_cores: 2
     vm_threads: 1
-
-    # Network Details
     vm_ip: "10.2.2.36"
     vm_netmask: "255.255.255.0"
     vm_gateway: "10.2.2.1"
     vm_network_bridge: "mgmtbridge"
-
-    # Storage Details
     base_image_url: "http://10.2.2.7:8091/qcows/rocky8/dev_image/rocky810_node100_feb16.qcow2"
     base_image_name: "rocky810_node100_feb16.qcow2"
     vm_storage_path: "/data/sandeep_test"
     vm_image_path: "{{ vm_storage_path }}/{{ vm_name }}.qcow2"
     base_image_path: "{{ vm_storage_path }}/{{ base_image_name }}"
-
-    # OS Details
     vm_os_variant: "rhel8.0"
 
   tasks:
@@ -70,18 +63,10 @@
         url: "{{ base_image_url }}"
         dest: "{{ base_image_path }}"
         mode: '0644'
+        owner: root
+        group: root
         timeout: 600
       when: not base_image_stat.stat.exists
-
-    - name: Fail if image not found after download
-      stat:
-        path: "{{ base_image_path }}"
-      register: downloaded_image
-
-    - name: Abort if download failed
-      fail:
-        msg: "❌ qcow2 image not found at {{ base_image_path }}"
-      when: not downloaded_image.stat.exists
 
     # -------------------------------------------------------
     # PREPARE VM DISK
@@ -93,14 +78,23 @@
         dest: "{{ vm_image_path }}"
         remote_src: yes
         mode: '0644'
+        owner: root
+        group: root
 
-    - name: Show VM disk image info
-      command: qemu-img info {{ vm_image_path }}
-      register: vm_disk_info
+    - name: Set ownership of VM disk to root
+      file:
+        path: "{{ vm_image_path }}"
+        owner: root
+        group: root
+        mode: '0644'
 
-    - name: Display VM disk info
+    - name: Verify disk ownership
+      command: ls -lh {{ vm_image_path }}
+      register: ownership_check
+
+    - name: Show disk ownership
       debug:
-        msg: "{{ vm_disk_info.stdout_lines }}"
+        msg: "{{ ownership_check.stdout }}"
 
     # -------------------------------------------------------
     # CONFIGURE STATIC IP & HOSTNAME
@@ -138,7 +132,8 @@
         --import
         --os-variant {{ vm_os_variant }}
         --network bridge={{ vm_network_bridge }},model=virtio
-        --graphics none
+        --graphics spice
+        --video vga
         --noautoconsole
         --autostart
 
