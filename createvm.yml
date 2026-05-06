@@ -1,6 +1,6 @@
 ---
 - name: Create VM on KVM Server metal2
-  hosts: metal2
+  hosts: all
   become: yes
 
   vars:
