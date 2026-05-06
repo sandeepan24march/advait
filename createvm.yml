@@ -1,0 +1,260 @@
+---
+- name: Create VM on KVM Server metal2
+  hosts: metal2
+  become: yes
+
+  vars:
+    # VM Details
+    vm_name: "awx_ansible"
+    vm_ram_mb: 4096
+    vm_vcpus: 2
+    vm_sockets: 1
+    vm_cores: 2
+    vm_threads: 1
+
+    # Network Details
+    vm_ip: "10.2.2.36"
+    vm_netmask: "255.255.255.0"
+    vm_gateway: "10.2.2.1"
+    vm_network_bridge: "mgmtbridge"
+
+    # Storage Details
+    base_image_url: "http://10.2.2.7:8091/qcows/rocky8/dev_image/rocky810_node100_feb16.qcow2"
+    base_image_name: "rocky810_node100_feb16.qcow2"
+    vm_storage_path: "/data/sandeep_test"
+    vm_image_path: "{{ vm_storage_path }}/{{ vm_name }}.qcow2"
+    base_image_path: "{{ vm_storage_path }}/{{ base_image_name }}"
+
+    # OS Details
+    vm_os_variant: "rhel8.0"
+
+  tasks:
+
+    # -------------------------------------------------------
+    # PRE-CHECKS
+    # -------------------------------------------------------
+
+    - name: Check required tools are installed
+      command: which {{ item }}
+      register: tool_check
+      loop:
+        - virsh
+        - virt-install
+        - qemu-img
+        - wget
+      ignore_errors: yes
+
+    - name: Install required packages if missing
+      yum:
+        name:
+          - libvirt
+          - virt-install
+          - qemu-img
+          - wget
+          - libguestfs-tools
+        state: present
+
+    - name: Ensure libvirtd is running
+      service:
+        name: libvirtd
+        state: started
+        enabled: yes
+
+    - name: Create VM storage directory if not exists
+      file:
+        path: "{{ vm_storage_path }}"
+        state: directory
+        mode: '0755'
+        owner: root
+        group: root
+
+    - name: Check if VM already exists
+      command: virsh dominfo {{ vm_name }}
+      register: vm_exists
+      ignore_errors: yes
+
+    - name: Show message if VM already exists
+      debug:
+        msg: "⚠️  VM {{ vm_name }} already exists — stopping here"
+      when: vm_exists.rc == 0
+
+    - name: Stop playbook if VM already exists
+      meta: end_play
+      when: vm_exists.rc == 0
+
+    # -------------------------------------------------------
+    # DOWNLOAD QCOW2 IMAGE
+    # -------------------------------------------------------
+
+    - name: Check if base qcow2 image already downloaded
+      stat:
+        path: "{{ base_image_path }}"
+      register: base_image_stat
+
+    - name: Download qcow2 image from HTTP server
+      get_url:
+        url: "{{ base_image_url }}"
+        dest: "{{ base_image_path }}"
+        mode: '0644'
+        timeout: 300
+      when: not base_image_stat.stat.exists
+
+    - name: Verify downloaded image
+      stat:
+        path: "{{ base_image_path }}"
+      register: downloaded_image
+
+    - name: Fail if image download failed
+      fail:
+        msg: "❌ qcow2 image not found at {{ base_image_path }}"
+      when: not downloaded_image.stat.exists
+
+    - name: Show downloaded image info
+      command: qemu-img info {{ base_image_path }}
+      register: image_info
+
+    - name: Display image info
+      debug:
+        msg: "{{ image_info.stdout_lines }}"
+
+    # -------------------------------------------------------
+    # PREPARE VM DISK IMAGE
+    # -------------------------------------------------------
+
+    - name: Copy base image for VM
+      copy:
+        src: "{{ base_image_path }}"
+        dest: "{{ vm_image_path }}"
+        remote_src: yes
+        mode: '0644'
+
+    - name: Verify VM disk image created
+      stat:
+        path: "{{ vm_image_path }}"
+      register: vm_disk_stat
+
+    - name: Fail if VM disk image not created
+      fail:
+        msg: "❌ VM disk image not found at {{ vm_image_path }}"
+      when: not vm_disk_stat.stat.exists
+
+    - name: Show VM disk image info
+      command: qemu-img info {{ vm_image_path }}
+      register: vm_disk_info
+
+    - name: Display VM disk info
+      debug:
+        msg: "{{ vm_disk_info.stdout_lines }}"
+
+    # -------------------------------------------------------
+    # CONFIGURE NETWORK - STATIC IP via guestfish
+    # -------------------------------------------------------
+
+    - name: Configure static IP on VM image
+      shell: |
+        virt-customize -a {{ vm_image_path }} \
+          --hostname {{ vm_name }} \
+          --run-command 'nmcli connection modify "System eth0" \
+            ipv4.method manual \
+            ipv4.addresses {{ vm_ip }}/24 \
+            ipv4.gateway {{ vm_gateway }} \
+            ipv4.dns 8.8.8.8 \
+            connection.autoconnect yes' \
+          --run-command 'nmcli connection up "System eth0"' \
+          --selinux-relabel
+      ignore_errors: yes
+
+    - name: Alternative network config using ifcfg file
+      shell: |
+        virt-customize -a {{ vm_image_path }} \
+          --hostname {{ vm_name }} \
+          --upload /dev/stdin:/etc/sysconfig/network-scripts/ifcfg-eth0 \
+          --selinux-relabel << 'IFCFG'
+        TYPE=Ethernet
+        BOOTPROTO=none
+        NAME=eth0
+        DEVICE=eth0
+        ONBOOT=yes
+        IPADDR={{ vm_ip }}
+        NETMASK={{ vm_netmask }}
+        GATEWAY={{ vm_gateway }}
+        DNS1=8.8.8.8
+        IFCFG
+      ignore_errors: yes
+
+    # -------------------------------------------------------
+    # CREATE VM
+    # -------------------------------------------------------
+
+    - name: Create VM using virt-install
+      command: >
+        virt-install
+        --name {{ vm_name }}
+        --ram {{ vm_ram_mb }}
+        --cpu host
+        --vcpus {{ vm_vcpus }},sockets={{ vm_sockets }},cores={{ vm_cores }},threads={{ vm_threads }}
+        --disk path={{ vm_image_path }},format=qcow2,bus=virtio
+        --import
+        --os-variant {{ vm_os_variant }}
+        --network bridge={{ vm_network_bridge }},model=virtio
+        --graphics none
+        --noautoconsole
+        --autostart
+
+    # -------------------------------------------------------
+    # POST CHECKS
+    # -------------------------------------------------------
+
+    - name: Wait for VM to boot
+      pause:
+        seconds: 30
+        prompt: "Waiting 30 seconds for VM to boot..."
+
+    - name: Check VM state
+      command: virsh domstate {{ vm_name }}
+      register: vm_state
+
+    - name: Show VM state
+      debug:
+        msg: "VM {{ vm_name }} state is: {{ vm_state.stdout }}"
+
+    - name: Get VM info
+      command: virsh dominfo {{ vm_name }}
+      register: vm_info
+
+    - name: Display VM details
+      debug:
+        msg: "{{ vm_info.stdout_lines }}"
+
+    - name: Get VM IP address
+      command: virsh domifaddr {{ vm_name }}
+      register: vm_ip_check
+      ignore_errors: yes
+
+    - name: Show VM IP
+      debug:
+        msg: "{{ vm_ip_check.stdout_lines }}"
+
+    - name: Show CPU topology
+      command: virsh vcpuinfo {{ vm_name }}
+      register: vcpu_info
+
+    - name: Display CPU topology
+      debug:
+        msg: "{{ vcpu_info.stdout_lines }}"
+
+    - name: Final summary
+      debug:
+        msg:
+          - "============================================"
+          - "✅ VM Created Successfully!"
+          - "============================================"
+          - "VM Name    : {{ vm_name }}"
+          - "VM IP      : {{ vm_ip }}"
+          - "Gateway    : {{ vm_gateway }}"
+          - "Netmask    : {{ vm_netmask }}"
+          - "Bridge     : {{ vm_network_bridge }}"
+          - "CPU        : {{ vm_sockets }} socket, {{ vm_cores }} cores, {{ vm_threads }} thread"
+          - "RAM        : {{ vm_ram_mb }} MB"
+          - "Disk       : {{ vm_image_path }}"
+          - "============================================"
