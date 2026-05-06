@@ -34,32 +34,6 @@
     # PRE-CHECKS
     # -------------------------------------------------------
 
-    - name: Check required tools are installed
-      command: which {{ item }}
-      register: tool_check
-      loop:
-        - virsh
-        - virt-install
-        - qemu-img
-        - wget
-      ignore_errors: yes
-
-    - name: Install required packages if missing
-      yum:
-        name:
-          - libvirt
-          - virt-install
-          - qemu-img
-          - wget
-          - libguestfs-tools
-        state: present
-
-    - name: Ensure libvirtd is running
-      service:
-        name: libvirtd
-        state: started
-        enabled: yes
-
     - name: Create VM storage directory if not exists
       file:
         path: "{{ vm_storage_path }}"
@@ -73,12 +47,12 @@
       register: vm_exists
       ignore_errors: yes
 
-    - name: Show message if VM already exists
+    - name: Stop playbook if VM already exists
       debug:
-        msg: "⚠️  VM {{ vm_name }} already exists — stopping here"
+        msg: "⚠️ VM {{ vm_name }} already exists — stopping"
       when: vm_exists.rc == 0
 
-    - name: Stop playbook if VM already exists
+    - name: End play if VM already exists
       meta: end_play
       when: vm_exists.rc == 0
 
@@ -86,7 +60,7 @@
     # DOWNLOAD QCOW2 IMAGE
     # -------------------------------------------------------
 
-    - name: Check if base qcow2 image already downloaded
+    - name: Check if base qcow2 already downloaded
       stat:
         path: "{{ base_image_path }}"
       register: base_image_stat
@@ -96,47 +70,29 @@
         url: "{{ base_image_url }}"
         dest: "{{ base_image_path }}"
         mode: '0644'
-        timeout: 300
+        timeout: 600
       when: not base_image_stat.stat.exists
 
-    - name: Verify downloaded image
+    - name: Fail if image not found after download
       stat:
         path: "{{ base_image_path }}"
       register: downloaded_image
 
-    - name: Fail if image download failed
+    - name: Abort if download failed
       fail:
         msg: "❌ qcow2 image not found at {{ base_image_path }}"
       when: not downloaded_image.stat.exists
 
-    - name: Show downloaded image info
-      command: qemu-img info {{ base_image_path }}
-      register: image_info
-
-    - name: Display image info
-      debug:
-        msg: "{{ image_info.stdout_lines }}"
-
     # -------------------------------------------------------
-    # PREPARE VM DISK IMAGE
+    # PREPARE VM DISK
     # -------------------------------------------------------
 
-    - name: Copy base image for VM
+    - name: Copy base image for new VM
       copy:
         src: "{{ base_image_path }}"
         dest: "{{ vm_image_path }}"
         remote_src: yes
         mode: '0644'
-
-    - name: Verify VM disk image created
-      stat:
-        path: "{{ vm_image_path }}"
-      register: vm_disk_stat
-
-    - name: Fail if VM disk image not created
-      fail:
-        msg: "❌ VM disk image not found at {{ vm_image_path }}"
-      when: not vm_disk_stat.stat.exists
 
     - name: Show VM disk image info
       command: qemu-img info {{ vm_image_path }}
@@ -147,29 +103,14 @@
         msg: "{{ vm_disk_info.stdout_lines }}"
 
     # -------------------------------------------------------
-    # CONFIGURE NETWORK - STATIC IP via guestfish
+    # CONFIGURE STATIC IP & HOSTNAME
     # -------------------------------------------------------
 
-    - name: Configure static IP on VM image
+    - name: Set hostname and static IP on VM image
       shell: |
         virt-customize -a {{ vm_image_path }} \
           --hostname {{ vm_name }} \
-          --run-command 'nmcli connection modify "System eth0" \
-            ipv4.method manual \
-            ipv4.addresses {{ vm_ip }}/24 \
-            ipv4.gateway {{ vm_gateway }} \
-            ipv4.dns 8.8.8.8 \
-            connection.autoconnect yes' \
-          --run-command 'nmcli connection up "System eth0"' \
-          --selinux-relabel
-      ignore_errors: yes
-
-    - name: Alternative network config using ifcfg file
-      shell: |
-        virt-customize -a {{ vm_image_path }} \
-          --hostname {{ vm_name }} \
-          --upload /dev/stdin:/etc/sysconfig/network-scripts/ifcfg-eth0 \
-          --selinux-relabel << 'IFCFG'
+          --run-command 'cat > /etc/sysconfig/network-scripts/ifcfg-eth0 << EOF
         TYPE=Ethernet
         BOOTPROTO=none
         NAME=eth0
@@ -179,8 +120,8 @@
         NETMASK={{ vm_netmask }}
         GATEWAY={{ vm_gateway }}
         DNS1=8.8.8.8
-        IFCFG
-      ignore_errors: yes
+        EOF' \
+          --selinux-relabel
 
     # -------------------------------------------------------
     # CREATE VM
@@ -214,34 +155,14 @@
       command: virsh domstate {{ vm_name }}
       register: vm_state
 
-    - name: Show VM state
-      debug:
-        msg: "VM {{ vm_name }} state is: {{ vm_state.stdout }}"
-
     - name: Get VM info
       command: virsh dominfo {{ vm_name }}
       register: vm_info
 
-    - name: Display VM details
-      debug:
-        msg: "{{ vm_info.stdout_lines }}"
-
-    - name: Get VM IP address
+    - name: Get VM IP
       command: virsh domifaddr {{ vm_name }}
-      register: vm_ip_check
+      register: vm_ip_out
       ignore_errors: yes
-
-    - name: Show VM IP
-      debug:
-        msg: "{{ vm_ip_check.stdout_lines }}"
-
-    - name: Show CPU topology
-      command: virsh vcpuinfo {{ vm_name }}
-      register: vcpu_info
-
-    - name: Display CPU topology
-      debug:
-        msg: "{{ vcpu_info.stdout_lines }}"
 
     - name: Final summary
       debug:
@@ -249,12 +170,13 @@
           - "============================================"
           - "✅ VM Created Successfully!"
           - "============================================"
-          - "VM Name    : {{ vm_name }}"
-          - "VM IP      : {{ vm_ip }}"
-          - "Gateway    : {{ vm_gateway }}"
-          - "Netmask    : {{ vm_netmask }}"
-          - "Bridge     : {{ vm_network_bridge }}"
-          - "CPU        : {{ vm_sockets }} socket, {{ vm_cores }} cores, {{ vm_threads }} thread"
-          - "RAM        : {{ vm_ram_mb }} MB"
-          - "Disk       : {{ vm_image_path }}"
+          - "VM Name  : {{ vm_name }}"
+          - "VM IP    : {{ vm_ip }}"
+          - "Gateway  : {{ vm_gateway }}"
+          - "Netmask  : {{ vm_netmask }}"
+          - "Bridge   : {{ vm_network_bridge }}"
+          - "CPU      : {{ vm_sockets }}S/{{ vm_cores }}C/{{ vm_threads }}T"
+          - "RAM      : {{ vm_ram_mb }} MB"
+          - "Disk     : {{ vm_image_path }}"
+          - "State    : {{ vm_state.stdout }}"
           - "============================================"
