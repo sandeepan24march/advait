@@ -1,0 +1,23 @@
+---
+- name: Terminate AWS EC2 Instance
+  hosts: localhost
+  connection: local
+  gather_facts: no
+
+  vars:
+    aws_region: us-east-2
+    instance_id: i-0538cb5f62e6d756d
+
+  tasks:
+
+    - name: Terminate EC2 instance
+      amazon.aws.ec2_instance:
+        region: "{{ aws_region }}"
+        instance_ids:
+          - "{{ instance_id }}"
+        state: absent
+        wait: yes
+
+    - name: Confirmation
+      debug:
+        msg: "EC2 instance terminated successfully"
