@@ -1,0 +1,31 @@
+---
+- name: Terminate Multiple AWS EC2 Instances
+  hosts: localhost
+  connection: local
+  gather_facts: no
+
+  vars:
+    aws_region: us-east-2
+
+    instance_ids:
+      - i-0c1d689cd9f743046
+      - i-0d44bc9a4c4501146
+      - i-059cd998a0f80af76
+      - i-04a0c6f8607b001fe
+      - i-00ce6741814f0874f
+      - i-08225b327489bfa7d
+      - i-0981ff0a04e81e558
+     
+
+  tasks:
+
+    - name: Terminate EC2 instances
+      amazon.aws.ec2_instance:
+        region: "{{ aws_region }}"
+        instance_ids: "{{ instance_ids }}"
+        state: absent
+        wait: yes
+
+    - name: Confirmation
+      debug:
+        msg: "All EC2 instances terminated successfully"
