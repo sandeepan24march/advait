@@ -1,0 +1,61 @@
+---
+- name: Deregister AMIs and Delete Associated Snapshots
+  hosts: localhost
+  connection: local
+  gather_facts: no
+
+  vars:
+    aws_region: us-east-2
+
+    ami_ids:
+      - ami-02af0e2e4bbea3534
+      - ami-01cd32278388a1b08
+      - ami-041b0e5d4cb6ab7cc
+      - ami-09a2cf2022dd37cad
+      - ami-0b503d917ba618dfc
+      - ami-09804e43d839edb4e
+      
+      
+      
+
+  tasks:
+
+    - name: Gather AMI information
+      amazon.aws.ec2_ami_info:
+        image_ids: "{{ ami_ids }}"
+        region: "{{ aws_region }}"
+      register: ami_info
+
+    - name: Extract snapshot IDs
+      set_fact:
+        snapshot_ids: >-
+          {{
+            ami_info.images
+            | map(attribute='block_device_mappings')
+            | flatten
+            | map(attribute='ebs.snapshot_id')
+            | list
+          }}
+
+    - name: Show snapshot IDs
+      debug:
+        var: snapshot_ids
+
+    - name: Deregister AMIs
+      amazon.aws.ec2_ami:
+        image_id: "{{ item }}"
+        region: "{{ aws_region }}"
+        state: absent
+        delete_snapshot: false
+      loop: "{{ ami_ids }}"
+
+    - name: Delete associated snapshots
+      amazon.aws.ec2_snapshot:
+        snapshot_id: "{{ item }}"
+        region: "{{ aws_region }}"
+        state: absent
+      loop: "{{ snapshot_ids }}"
+
+    - name: Final confirmation
+      debug:
+        msg: "AMIs and associated snapshots deleted successfully"
