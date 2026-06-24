@@ -10,7 +10,7 @@
     vm_sockets: 1
     vm_cores: 4
     vm_threads: 1
-    vm_ip: "154.205.1.6"              # <-- CHANGE per VM (confirm free IP first)
+    vm_ip: "154.205.1.7"              # <-- CHANGE per VM (confirm free IP first)
     vm_netmask: "255.255.255.128"
     vm_gateway: "154.205.1.126"          # <-- confirm actual gateway for this subnet
     vm_network_bridge: "mgmtbridge"            # <-- confirm actual bridge name: `ip link` / `brctl show` on 192.168.10.22
