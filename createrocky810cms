@@ -1,0 +1,164 @@
+---
+- name: Create VM on KVM Server (154.205.1.2) from existing template
+  hosts: all   # Use AWX "Limit" at launch time to scope to 154.205.1.2 only
+  become: yes
+
+  vars:
+    vm_name: "rocky810_vm01"            # <-- CHANGE per VM you create
+    vm_ram_mb: 12288
+    vm_vcpus: 4
+    vm_sockets: 1
+    vm_cores: 4
+    vm_threads: 1
+    vm_ip: "154.205.1.6"              # <-- CHANGE per VM (confirm free IP first)
+    vm_netmask: "255.255.255.128"
+    vm_gateway: "154.205.1.126"          # <-- confirm actual gateway for this subnet
+    vm_network_bridge: "mgmtbridge"            # <-- confirm actual bridge name: `ip link` / `brctl show` on 192.168.10.22
+    template_image_path: "/home/Cataleya_VM/Template/rocky8_10_node300_May12.qcow2"
+    vm_storage_path: "/home/Cataleya_VM/new-vm/"
+    vm_image_path: "{{ vm_storage_path }}/{{ vm_name }}.qcow2"
+    vm_os_variant: "rhel8.0"            # or "rocky8" if registered - check: osinfo-query os | grep -i rocky
+
+  tasks:
+
+    # -------------------------------------------------------
+    # PRE-CHECKS
+    # -------------------------------------------------------
+
+    - name: Create VM storage directory if not exists
+      file:
+        path: "{{ vm_storage_path }}"
+        state: directory
+        mode: '0755'
+        owner: root
+        group: root
+
+    - name: Check if VM already exists
+      command: virsh dominfo {{ vm_name }}
+      register: vm_exists
+      ignore_errors: yes
+
+    - name: Stop playbook if VM already exists
+      debug:
+        msg: "⚠️ VM {{ vm_name }} already exists — stopping"
+      when: vm_exists.rc == 0
+
+    - name: End play if VM already exists
+      meta: end_play
+      when: vm_exists.rc == 0
+
+    # -------------------------------------------------------
+    # VERIFY TEMPLATE EXISTS (no download needed - template is local on this host)
+    # -------------------------------------------------------
+
+    - name: Verify template qcow2 exists on this host
+      stat:
+        path: "{{ template_image_path }}"
+      register: template_stat
+
+    - name: Fail if template is missing
+      fail:
+        msg: "Template not found at {{ template_image_path }} on this host"
+      when: not template_stat.stat.exists
+
+    # -------------------------------------------------------
+    # PREPARE VM DISK (copy template -> new per-VM disk)
+    # -------------------------------------------------------
+
+    - name: Copy template image for new VM
+      copy:
+        src: "{{ template_image_path }}"
+        dest: "{{ vm_image_path }}"
+        remote_src: yes
+        mode: '0644'
+        owner: root
+        group: root
+
+    - name: Verify disk ownership
+      command: ls -lh {{ vm_image_path }}
+      register: ownership_check
+
+    - name: Show disk ownership
+      debug:
+        msg: "{{ ownership_check.stdout }}"
+
+    # -------------------------------------------------------
+    # CONFIGURE STATIC IP & HOSTNAME
+    # -------------------------------------------------------
+
+    - name: Set hostname and static IP on VM image
+      shell: |
+        virt-customize -a {{ vm_image_path }} \
+          --hostname {{ vm_name }} \
+          --run-command 'cat > /etc/sysconfig/network-scripts/ifcfg-eth0 << EOF
+        TYPE=Ethernet
+        BOOTPROTO=static
+        NAME=eth0
+        DEVICE=eth0
+        ONBOOT=yes
+        IPADDR={{ vm_ip }}
+        NETMASK={{ vm_netmask }}
+        GATEWAY={{ vm_gateway }}
+        DNS1=98.158.111.2
+        EOF' \
+          --selinux-relabel
+
+    # -------------------------------------------------------
+    # CREATE VM
+    # -------------------------------------------------------
+
+    - name: Create VM using virt-install
+      command: >
+        virt-install
+        --name {{ vm_name }}
+        --ram {{ vm_ram_mb }}
+        --cpu host
+        --vcpus {{ vm_vcpus }},sockets={{ vm_sockets }},cores={{ vm_cores }},threads={{ vm_threads }}
+        --disk path={{ vm_image_path }},format=qcow2,bus=virtio
+        --import
+        --os-variant {{ vm_os_variant }}
+        --network bridge={{ vm_network_bridge }},model=virtio
+        --graphics spice
+        --video vga
+        --noautoconsole
+        --autostart
+
+    # -------------------------------------------------------
+    # POST CHECKS
+    # -------------------------------------------------------
+
+    - name: Wait for VM to boot
+      pause:
+        seconds: 30
+        prompt: "Waiting 30 seconds for VM to boot..."
+
+    - name: Check VM state
+      command: virsh domstate {{ vm_name }}
+      register: vm_state
+
+    - name: Get VM info
+      command: virsh dominfo {{ vm_name }}
+      register: vm_info
+
+    - name: Get VM IP
+      command: virsh domifaddr {{ vm_name }}
+      register: vm_ip_out
+      ignore_errors: yes
+
+    - name: Final summary
+      debug:
+        msg:
+          - "============================================"
+          - "✅ VM Created Successfully!"
+          - "============================================"
+          - "VM Name  : {{ vm_name }}"
+          - "VM IP    : {{ vm_ip }}"
+          - "Gateway  : {{ vm_gateway }}"
+          - "Netmask  : {{ vm_netmask }}"
+          - "Bridge   : {{ vm_network_bridge }}"
+          - "CPU      : {{ vm_sockets }}S/{{ vm_cores }}C/{{ vm_threads }}T"
+          - "RAM      : {{ vm_ram_mb }} MB"
+          - "Disk     : {{ vm_image_path }}"
+          - "Template : {{ template_image_path }}"
+          - "State    : {{ vm_state.stdout }}"
+          - "============================================"
