@@ -1,10 +1,10 @@
 ---
 - name: Create VM on KVM Server (154.205.1.3) from existing template
-  hosts: all   # Use AWX "Limit" at launch time to scope to 154.205.1.2 only
+  hosts: all   # Use AWX "Limit" at launch time to scope to 154.205.1.3 only
   become: yes
 
   vars:
-    vm_name: "rocky810_vm01"            # <-- CHANGE per VM you create
+    vm_name: "kital_sbc_sec"            # <-- CHANGE per VM you create
     vm_ram_mb: 8192
     vm_vcpus: 4
     vm_sockets: 1
@@ -13,9 +13,10 @@
     vm_ip: "154.205.1.8"              # <-- CHANGE per VM (confirm free IP first)
     vm_netmask: "255.255.255.128"
     vm_gateway: "154.205.1.126"          # <-- confirm actual gateway for this subnet
-    vm_network_bridge: "mgmtbridge"            # <-- confirm actual bridge name: `ip link` / `brctl show` on 192.168.10.22
+    vm_network_bridge: "mgmtbridge"            # <-- confirm actual bridge name: `ip link` / `brctl show` on 154.205.1.2
+    vm_sriov_network: "sr-iov-port2"    # <-- second NIC: libvirt SR-IOV pool network name
     template_image_path: "/home/Cataleya_VM/Template/rocky8_10_node300_May12.qcow2"
-    vm_storage_path: "/home/Cataleya_VM/new-vm/"
+    vm_storage_path: "/home/Cataleya_VM/kital_sbc_sec/"
     vm_image_path: "{{ vm_storage_path }}/{{ vm_name }}.qcow2"
     vm_os_variant: "rhel8.0"            # or "rocky8" if registered - check: osinfo-query os | grep -i rocky
 
@@ -62,6 +63,20 @@
       when: not template_stat.stat.exists
 
     # -------------------------------------------------------
+    # VERIFY SR-IOV NETWORK EXISTS AND IS ACTIVE
+    # -------------------------------------------------------
+
+    - name: Check SR-IOV configured network status
+      command: virsh net-info {{ vm_sriov_network }}
+      register: sriov_net_check
+      ignore_errors: yes
+
+    - name: Fail if SR-IOV network is missing or inactive
+      fail:
+        msg: "Network '{{ vm_sriov_network }}' not found or not active on this host. Check: virsh net-list --all"
+      when: sriov_net_check.rc != 0 or 'Active:         yes' not in sriov_net_check.stdout
+
+    # -------------------------------------------------------
     # PREPARE VM DISK (copy template -> new per-VM disk)
     # -------------------------------------------------------
 
@@ -104,7 +119,7 @@
           --selinux-relabel
 
     # -------------------------------------------------------
-    # CREATE VM
+    # CREATE VM (NIC1 = mgmt bridge, NIC2 = SR-IOV port, no IP, model e1000e)
     # -------------------------------------------------------
 
     - name: Create VM using virt-install
@@ -118,6 +133,7 @@
         --import
         --os-variant {{ vm_os_variant }}
         --network bridge={{ vm_network_bridge }},model=virtio
+        --network network={{ vm_sriov_network }},model=e1000e
         --graphics spice
         --video vga
         --noautoconsole
@@ -145,6 +161,11 @@
       register: vm_ip_out
       ignore_errors: yes
 
+    - name: Get VM attached NICs
+      command: virsh domiflist {{ vm_name }}
+      register: vm_nic_list
+      ignore_errors: yes
+
     - name: Final summary
       debug:
         msg:
@@ -155,10 +176,12 @@
           - "VM IP    : {{ vm_ip }}"
           - "Gateway  : {{ vm_gateway }}"
           - "Netmask  : {{ vm_netmask }}"
-          - "Bridge   : {{ vm_network_bridge }}"
+          - "NIC 1    : {{ vm_network_bridge }} (bridge, virtio)"
+          - "NIC 2    : {{ vm_sriov_network }} (SR-IOV, model e1000e, no IP assigned)"
           - "CPU      : {{ vm_sockets }}S/{{ vm_cores }}C/{{ vm_threads }}T"
           - "RAM      : {{ vm_ram_mb }} MB"
           - "Disk     : {{ vm_image_path }}"
           - "Template : {{ template_image_path }}"
           - "State    : {{ vm_state.stdout }}"
+          - "NIC List : {{ vm_nic_list.stdout }}"
           - "============================================"
