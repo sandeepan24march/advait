@@ -74,7 +74,7 @@
     - name: Fail if SR-IOV network is missing or inactive
       fail:
         msg: "Network '{{ vm_sriov_network }}' not found or not active on this host. Check: virsh net-list --all"
-      when: sriov_net_check.rc != 0 or 'Active:         yes' not in sriov_net_check.stdout
+      when: "sriov_net_check.rc != 0 or 'Active:         yes' not in sriov_net_check.stdout"
 
     # -------------------------------------------------------
     # PREPARE VM DISK (copy template -> new per-VM disk)
